@@ -1,0 +1,146 @@
+version: '3.8'
+
+services:
+
+  # ── Infrastructure ──────────────────────────────────────────────────────────
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: iot_rabbitmq
+    ports:
+      - "1883:1883"   # MQTT plugin
+      - "5672:5672"   # AMQP
+      - "15672:15672" # Management UI
+    volumes:
+      - ./rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf
+      - ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  influxdb:
+    image: influxdb:2.7
+    container_name: iot_influxdb
+    ports:
+      - "8086:8086"
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: adminpassword
+      DOCKER_INFLUXDB_INIT_ORG: iot_org
+      DOCKER_INFLUXDB_INIT_BUCKET: sensors
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: mytoken123
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: iot_grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      - influxdb
+
+  # ── Subscribers ─────────────────────────────────────────────────────────────
+
+  influx_subscriber:
+    build: ./subscribers/influx_subscriber
+    container_name: iot_influx_subscriber
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
+    restart: on-failure
+
+  alert_subscriber:
+    build: ./subscribers/alert_subscriber
+    container_name: iot_alert_subscriber
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      NOTIFICATION_HOST: notification_service
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      notification_service:
+        condition: service_started
+    restart: on-failure
+
+  logger_subscriber:
+    build: ./subscribers/logger_subscriber
+    container_name: iot_logger_subscriber
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      LOG_FILE: /logs/sensor_log.txt
+    volumes:
+      - logger_logs:/logs
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    restart: on-failure
+
+  notification_service:
+    build: ./notification_service
+    container_name: iot_notification_service
+    environment:
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      GRPC_PORT: "50051"
+    ports:
+      - "50051:50051"
+    restart: on-failure
+
+  # ── Sensors ──────────────────────────────────────────────────────────────────
+  # 每個 sensor 使用相同的 Dockerfile，透過 build arg 選擇執行檔
+
+  temperature_sensor:
+    build:
+      context: ./sensors
+      args:
+        SENSOR_TYPE: temperature_sensor
+    container_name: iot_temperature_sensor
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    restart: on-failure
+
+  humidity_sensor:
+    build:
+      context: ./sensors
+      args:
+        SENSOR_TYPE: humidity_sensor
+    container_name: iot_humidity_sensor
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    restart: on-failure
+
+  gps_sensor:
+    build:
+      context: ./sensors
+      args:
+        SENSOR_TYPE: gps_sensor
+    container_name: iot_gps_sensor
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    restart: on-failure
+
+volumes:
+  influxdb_data:
+  grafana_data:
+  logger_logs:

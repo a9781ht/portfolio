@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package alert;
+
+service NotificationService {
+    rpc SendAlert (AlertRequest) returns (AlertResponse);
+}
+
+message AlertRequest {
+    string sensor_id = 1;
+    string type      = 2;
+    double value     = 3;
+    string message   = 4;
+}
+
+message AlertResponse {
+    bool success = 1;
+}
